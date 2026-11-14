@@ -1214,6 +1214,7 @@ function initPetals(){
   }
   let t = 0;
   function frame(){
+    if (raf) return;
     t += .016;
     ctx.clearRect(0, 0, w, h);
     for (const p of petals){
@@ -1232,6 +1233,13 @@ function initPetals(){
   requestAnimationFrame(() => { resize(); frame(); });
   if (window.ResizeObserver) new ResizeObserver(() => resize()).observe($("#hero"));
   addEventListener("resize", () => { clearTimeout(resize._t); resize._t = setTimeout(resize, 180); });
+  /* pause the loop when the hero is scrolled away — saves battery on phones */
+  if (window.IntersectionObserver){
+    new IntersectionObserver(([en]) => {
+      if (en.isIntersecting) frame();
+      else if (raf){ cancelAnimationFrame(raf); raf = 0; }
+    }).observe($("#hero"));
+  }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) cancelAnimationFrame(raf); else frame();
   });
@@ -1385,7 +1393,7 @@ const player = {
       a.onended = () => { if (this.playing) this.load(this.idx + 1, true); };
     }
     if (this.time > 0) a.currentTime = this.time;
-    a.play().catch(() => {});
+    a.play().catch(() => { if (this.playing) toast("点一下播放键再试试（手机浏览器需要手动触发播放）"); });
   },
   play(){
     this.playing = true;
@@ -1420,7 +1428,16 @@ const player = {
    ========================================================= */
 const custom = TRACKS.map(() => ({ url: null, name: "" }));
 EMBEDDED.forEach((e, i) => { custom[i].url = e.url; custom[i].name = e.name; custom[i].uploaded = false; });
+/* huge data-URI audio is unreliable on mobile Safari/Chrome — swap to blob URLs once fetched */
+const embeddedBlobs = EMBEDDED.map((e, i) => {
+  fetch(e.url).then(r => r.blob()).then(b => {
+    const u = URL.createObjectURL(b);
+    if (!custom[i].uploaded && custom[i].url === e.url) custom[i].url = u;
+  }).catch(() => {});
+  return null;
+});
 audioEl.preload = "metadata";
+audioEl.onerror = () => { if (player.playing && player.isCustom()) toast("这条音频加载失败了，换一条试试"); };
 audioEl.onloadedmetadata = () => player.sync();
 const voiceDB = {
   db: null,
@@ -1486,9 +1503,8 @@ async function setCustomAudio(i, file){
 async function clearCustomAudio(i){
   await voiceDB.del(i);
   if (custom[i].url && custom[i].url.startsWith("blob:")) URL.revokeObjectURL(custom[i].url);
-  const e = EMBEDDED[i];
-  custom[i].url = e ? e.url : null;
-  custom[i].name = e ? e.name : "";
+  custom[i].url = embeddedBlobs[i] || (EMBEDDED[i] ? EMBEDDED[i].url : null);
+  custom[i].name = EMBEDDED[i] ? EMBEDDED[i].name : "";
   custom[i].uploaded = false;
   renderSlots();
   if (player.playing && player.idx === i){ player.tok++; player.time = 0; audioEl.pause(); player.startAudio(); }
